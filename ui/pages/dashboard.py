@@ -13,32 +13,15 @@ from core.scanner import Scanner
 
 class FullScanWorker(QThread):
     progress = Signal(str, int, int)
-    finished = Signal(dict, str, str)
-    webhook_result = Signal(bool, str)
+    finished = Signal(dict, str)
     error = Signal(str)
-
-    def __init__(self, webhook_url=""):
-        super().__init__()
-        self.webhook_url = webhook_url
 
     def run(self):
         try:
             s = Scanner()
-            if self.webhook_url:
-                s.set_webhook(self.webhook_url)
             results = s.full_scan(callback=self._p)
             report_path = s.save_report(results)
-
-            wh_ok = None
-            wh_msg = None
-            if self.webhook_url:
-                from core.webhook import WebhookSender
-                wh = WebhookSender(self.webhook_url)
-                wh_ok, wh_msg = wh.send_scan_report(results, report_path)
-
-            self.finished.emit(results, report_path, "")
-            if wh_ok is not None:
-                self.webhook_result.emit(wh_ok, wh_msg)
+            self.finished.emit(results, report_path)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -152,7 +135,7 @@ class DashboardPage(BasePage):
             font-family: 'Cascadia Code', 'Consolas', monospace;
         """)
         self.ra.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.ra.setMinimumHeight(100)
+        self.ra.setMinimumHeight(120)
         rc.layout().addWidget(self.ra)
 
         self.open_btn = QPushButton("open report file")
@@ -163,7 +146,6 @@ class DashboardPage(BasePage):
         rc.layout().addWidget(self.open_btn)
 
         cl.addWidget(rc)
-
         scroll.setWidget(content)
         layout.addWidget(scroll, 1)
 
@@ -178,12 +160,9 @@ class DashboardPage(BasePage):
         self._pv = 0
         self.pfill.setFixedWidth(0)
 
-        webhook_url = getattr(self.mw, 'webhook_url', '')
-
-        self.worker = FullScanWorker(webhook_url)
+        self.worker = FullScanWorker()
         self.worker.progress.connect(self._on_p)
         self.worker.finished.connect(self._on_done)
-        self.worker.webhook_result.connect(self._on_wh)
         self.worker.error.connect(self._on_err)
         self.worker.start()
 
@@ -192,7 +171,7 @@ class DashboardPage(BasePage):
         w = int((cur / total) * self.pbar.width())
         self.pfill.setFixedWidth(max(w, 4))
 
-    def _on_done(self, results, report_path, _unused=""):
+    def _on_done(self, results, report_path):
         self.last_report_path = report_path
         self.run_btn.setEnabled(True)
         self.run_btn.setText("run full scan")
@@ -218,11 +197,24 @@ class DashboardPage(BasePage):
                 short.append(f"  {name}: {len(r.warnings)} warnings")
         summary = "\n".join(short) if short else "  all clean"
 
+        # --- webhook send from main thread ---
+        wh_text = ""
+        wh_url = getattr(self.mw, 'webhook_url', '').strip()
+        if wh_url:
+            try:
+                from core.webhook import WebhookSender
+                wh = WebhookSender(wh_url)
+                ok, msg = wh.send_scan_report(results, report_path)
+                wh_text = f"\nwebhook: {'ok' if ok else msg}"
+            except Exception as e:
+                wh_text = f"\nwebhook error: {e}"
+
         self.ra.setText(
             f"scan complete\n"
             f"  {issues} issues, {warns} warnings across {total} checks\n"
             f"\n{summary}\n"
             f"\nreport saved to:\n  {report_path}"
+            f"{wh_text}"
         )
         self.open_btn.setVisible(True)
 
@@ -230,12 +222,6 @@ class DashboardPage(BasePage):
             self.mw.show_toast(f"{issues} issues, {warns} warnings", "warning", 5000)
         else:
             self.mw.show_toast("all clear", "success", 4000)
-
-    def _on_wh(self, ok, msg):
-        if ok:
-            self.mw.show_toast("webhook sent", "success", 3000)
-        else:
-            self.mw.show_toast(f"webhook: {msg}", "warning", 4000)
 
     def _on_err(self, msg):
         self.run_btn.setEnabled(True)
