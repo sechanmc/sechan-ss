@@ -1,8 +1,34 @@
 import json
-import urllib.request
-import urllib.error
-from datetime import datetime
 import os
+import uuid
+from datetime import datetime
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+
+
+def _build_multipart(fields, file_path):
+    boundary = uuid.uuid4().hex
+    body = bytearray()
+    crlf = b"\r\n"
+
+    for key, value in fields.items():
+        body += f"--{boundary}{crlf}".encode()
+        body += f'Content-Disposition: form-data; name="{key}"{crlf}{crlf}'.encode()
+        body += f"{value}{crlf}".encode()
+
+    if file_path:
+        filename = os.path.basename(file_path)
+        with open(file_path, "rb") as f:
+            file_data = f.read()
+        body += f"--{boundary}{crlf}".encode()
+        body += f'Content-Disposition: form-data; name="file"; filename="{filename}"{crlf}'.encode()
+        body += b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        body += file_data
+        body += crlf
+
+    body += f"--{boundary}--{crlf}".encode()
+    content_type = f"multipart/form-data; boundary={boundary}"
+    return bytes(body), content_type
 
 
 class WebhookSender:
@@ -34,7 +60,7 @@ class WebhookSender:
 
         return self._post({"embeds": [embed]})
 
-    def send_scan_report(self, results, download_url=""):
+    def send_scan_report(self, results, report_path=""):
         if not self.url:
             return False, "no webhook configured"
 
@@ -44,6 +70,11 @@ class WebhookSender:
 
         total_issues = sum(len(r.found) for r in results.values())
         total_warns = sum(len(r.warnings) for r in results.values())
+
+        attachments = []
+        if report_path and os.path.exists(report_path):
+            filename = os.path.basename(report_path)
+            attachments.append({"id": 0, "filename": filename})
 
         fields = [
             {"name": "User",   "value": user, "inline": True},
@@ -65,38 +96,49 @@ class WebhookSender:
         if details:
             fields.append({"name": "Details", "value": "\n".join(details[:5])[:1024], "inline": False})
 
-        if download_url:
+        if attachments:
             fields.append({
-                "name": "Download Report",
-                "value": f"[download link]({download_url}) \u2022 expires in 15m",
+                "name": "Report",
+                "value": f"attached: {attachments[0]['filename']}",
                 "inline": False,
             })
 
-        embed = {
-            "title": "Sechan SS - Scan Report",
-            "color": 0xEF4444 if total_issues > 0 else (0xF59E0B if total_warns > 0 else 0x22C55E),
-            "fields": fields,
-            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S") + ".000Z",
+        payload = {
+            "embeds": [{
+                "title": "Sechan SS - Scan Report",
+                "color": 0xEF4444 if total_issues > 0 else (0xF59E0B if total_warns > 0 else 0x22C55E),
+                "fields": fields,
+                "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S") + ".000Z",
+            }],
+            "attachments": attachments,
         }
 
-        return self._post({"embeds": [embed]})
+        if report_path and os.path.exists(report_path):
+            multipart_fields = {"payload_json": json.dumps(payload)}
+            data, content_type = _build_multipart(multipart_fields, report_path)
+            return self._post_raw(data, content_type)
+        else:
+            return self._post(payload)
 
     def _post(self, payload_dict):
-        payload = json.dumps(payload_dict).encode("utf-8")
+        data = json.dumps(payload_dict).encode("utf-8")
+        return self._post_raw(data, "application/json")
+
+    def _post_raw(self, data, content_type):
         try:
-            req = urllib.request.Request(
+            req = Request(
                 self.url,
-                data=payload,
+                data=data,
                 headers={
-                    "Content-Type": "application/json",
+                    "Content-Type": content_type,
                     "User-Agent": "Mozilla/5.0",
                 },
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urlopen(req, timeout=15) as resp:
                 return True, f"sent (status {resp.status})"
-        except urllib.error.HTTPError as e:
+        except HTTPError as e:
             body = e.read().decode("utf-8", errors="ignore")
-            return False, f"HTTP {e.code}: {body[:200]}"
+            return False, f"HTTP {e.code}: {body[:300]}"
         except Exception as e:
             return False, f"failed: {e}"

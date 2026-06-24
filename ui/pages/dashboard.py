@@ -9,7 +9,6 @@ from .base_page import BasePage
 from ..widgets import Card, StatCard
 from ..theme import Colors
 from core.scanner import Scanner
-from core.tempserver import TempFileServer
 
 
 class FullScanWorker(QThread):
@@ -30,18 +29,14 @@ class FullScanWorker(QThread):
             results = s.full_scan(callback=self._p)
             report_path = s.save_report(results)
 
-            dl_url = ""
-            temp_server = TempFileServer()
-            dl_url = temp_server.start(report_path, lifetime=900)
-
             wh_ok = None
             wh_msg = None
             if self.webhook_url:
                 from core.webhook import WebhookSender
                 wh = WebhookSender(self.webhook_url)
-                wh_ok, wh_msg = wh.send_scan_report(results, dl_url)
+                wh_ok, wh_msg = wh.send_scan_report(results, report_path)
 
-            self.finished.emit(results, report_path, dl_url)
+            self.finished.emit(results, report_path, "")
             if wh_ok is not None:
                 self.webhook_result.emit(wh_ok, wh_msg)
         except Exception as e:
@@ -57,7 +52,6 @@ class DashboardPage(BasePage):
         self.mw = mw
         self.scanner = Scanner()
         self.last_report_path = None
-        self.last_dl_url = ""
         self._pv = 0
 
         layout = QVBoxLayout(self)
@@ -198,9 +192,8 @@ class DashboardPage(BasePage):
         w = int((cur / total) * self.pbar.width())
         self.pfill.setFixedWidth(max(w, 4))
 
-    def _on_done(self, results, report_path, dl_url=""):
+    def _on_done(self, results, report_path, _unused=""):
         self.last_report_path = report_path
-        self.last_dl_url = dl_url
         self.run_btn.setEnabled(True)
         self.run_btn.setText("run full scan")
         self.p_label.setText("done")
@@ -225,13 +218,11 @@ class DashboardPage(BasePage):
                 short.append(f"  {name}: {len(r.warnings)} warnings")
         summary = "\n".join(short) if short else "  all clean"
 
-        dl_text = f"\ndownload link (15m):\n  {dl_url}" if dl_url else ""
         self.ra.setText(
             f"scan complete\n"
             f"  {issues} issues, {warns} warnings across {total} checks\n"
             f"\n{summary}\n"
             f"\nreport saved to:\n  {report_path}"
-            f"{dl_text}"
         )
         self.open_btn.setVisible(True)
 
@@ -267,7 +258,6 @@ class DashboardPage(BasePage):
         self.pbar.setVisible(False)
         self.open_btn.setVisible(False)
         self.last_report_path = None
-        self.last_dl_url = ""
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
