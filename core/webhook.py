@@ -1,34 +1,8 @@
 import json
 import os
-import uuid
 from datetime import datetime
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
-
-
-def _build_multipart(fields, file_path):
-    boundary = uuid.uuid4().hex
-    body = bytearray()
-    crlf = b"\r\n"
-
-    for key, value in fields.items():
-        body += f"--{boundary}{crlf}".encode()
-        body += f'Content-Disposition: form-data; name="{key}"{crlf}{crlf}'.encode()
-        body += f"{value}{crlf}".encode()
-
-    if file_path:
-        filename = os.path.basename(file_path)
-        with open(file_path, "rb") as f:
-            file_data = f.read()
-        body += f"--{boundary}{crlf}".encode()
-        body += f'Content-Disposition: form-data; name="file"; filename="{filename}"{crlf}'.encode()
-        body += b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
-        body += file_data
-        body += crlf
-
-    body += f"--{boundary}--{crlf}".encode()
-    content_type = f"multipart/form-data; boundary={boundary}"
-    return bytes(body), content_type
 
 
 class WebhookSender:
@@ -71,11 +45,6 @@ class WebhookSender:
         total_issues = sum(len(r.found) for r in results.values())
         total_warns = sum(len(r.warnings) for r in results.values())
 
-        attachments = []
-        if report_path and os.path.exists(report_path):
-            filename = os.path.basename(report_path)
-            attachments.append({"id": 0, "filename": filename})
-
         fields = [
             {"name": "User",   "value": user, "inline": True},
             {"name": "Host",   "value": host, "inline": True},
@@ -89,17 +58,17 @@ class WebhookSender:
             found_list = [m for m, p in r.found]
             warn_list = [m for m, p in r.warnings]
             if found_list:
-                details.append(f"**{name}** - found: {', '.join(found_list[:5])}")
+                details.append(f"**{name}** - {', '.join(found_list[:5])}")
             elif warn_list:
-                details.append(f"**{name}** - warnings: {', '.join(warn_list[:5])}")
+                details.append(f"**{name}** - {', '.join(warn_list[:5])}")
 
         if details:
             fields.append({"name": "Details", "value": "\n".join(details[:5])[:1024], "inline": False})
 
-        if attachments:
+        if report_path:
             fields.append({
                 "name": "Report",
-                "value": f"attached: {attachments[0]['filename']}",
+                "value": report_path,
                 "inline": False,
             })
 
@@ -110,15 +79,9 @@ class WebhookSender:
                 "fields": fields,
                 "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S") + ".000Z",
             }],
-            "attachments": attachments,
         }
 
-        if report_path and os.path.exists(report_path):
-            multipart_fields = {"payload_json": json.dumps(payload)}
-            data, content_type = _build_multipart(multipart_fields, report_path)
-            return self._post_raw(data, content_type)
-        else:
-            return self._post(payload)
+        return self._post(payload)
 
     def _post(self, payload_dict):
         data = json.dumps(payload_dict).encode("utf-8")
