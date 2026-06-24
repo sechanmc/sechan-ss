@@ -6,27 +6,8 @@
 import sys
 import os
 import threading
-import ctypes
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-
-def _is_admin():
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
-        return False
-
-
-def _elevate():
-    ctypes.windll.shell32.ShellExecuteW(
-        None, "runas", sys.executable, f'"{sys.argv[0]}"', None, 1
-    )
-    sys.exit()
-
-
-if not _is_admin():
-    _elevate()
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
