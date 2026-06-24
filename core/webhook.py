@@ -1,32 +1,8 @@
 import json
 import os
-import uuid
 from datetime import datetime
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
-
-
-def _build_multipart(fields, file_path):
-    boundary = uuid.uuid4().hex
-    parts = []
-
-    for key, value in fields.items():
-        parts.append(f"--{boundary}\r\n".encode())
-        parts.append(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode())
-        parts.append(f"{value}\r\n".encode())
-
-    if file_path:
-        filename = os.path.basename(file_path)
-        parts.append(f"--{boundary}\r\n".encode())
-        parts.append(f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode())
-        parts.append(b"Content-Type: text/plain; charset=utf-8\r\n\r\n")
-        with open(file_path, "rb") as f:
-            parts.append(f.read())
-        parts.append(b"\r\n")
-
-    parts.append(f"--{boundary}--\r\n".encode())
-    content_type = f"multipart/form-data; boundary={boundary}"
-    return b"".join(parts), content_type
 
 
 class WebhookSender:
@@ -71,7 +47,7 @@ class WebhookSender:
             fields.append({"name": "Details", "value": "\n".join(details[:5])[:1024], "inline": False})
 
         embed = {
-            "title": "Sechan SS \u2014 Scan Report",
+            "title": "Sechan SS - Scan Report",
             "color": 0xEF4444 if total_issues > 0 else (0xF59E0B if total_warns > 0 else 0x22C55E),
             "fields": fields,
             "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S") + ".000Z",
@@ -82,12 +58,30 @@ class WebhookSender:
                 "embeds": [embed],
                 "attachments": [{"id": 0, "filename": filename}],
             }
-            multipart_fields = {"payload_json": json.dumps(payload)}
-            data, content_type = _build_multipart(multipart_fields, report_path)
-            return self._post_raw(data, content_type)
+            boundary = os.urandom(16).hex()
+            payload_bytes = json.dumps(payload).encode("utf-8")
+
+            with open(report_path, "rb") as f:
+                file_bytes = f.read()
+
+            parts = [
+                f"--{boundary}\r\n".encode(),
+                b'Content-Disposition: form-data; name="payload_json"\r\n',
+                b"Content-Type: application/json\r\n\r\n",
+                payload_bytes,
+                b"\r\n",
+                f"--{boundary}\r\n".encode(),
+                f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode(),
+                b"\r\n",
+                file_bytes,
+                b"\r\n",
+                f"--{boundary}--\r\n".encode(),
+            ]
+            body = b"".join(parts)
+            ct = f"multipart/form-data; boundary={boundary}"
+            return self._post_raw(body, ct)
         else:
-            payload = {"embeds": [embed]}
-            return self._post(payload)
+            return self._post({"embeds": [embed]})
 
     def _post(self, payload_dict):
         data = json.dumps(payload_dict).encode("utf-8")
@@ -105,10 +99,9 @@ class WebhookSender:
                 method="POST",
             )
             with urlopen(req, timeout=15) as resp:
-                body = resp.read().decode("utf-8", errors="ignore")
                 return True, f"sent ({resp.status})"
         except HTTPError as e:
             body = e.read().decode("utf-8", errors="ignore")
-            return False, f"HTTP {e.code}: {body[:400]}"
+            return False, f"HTTP {e.code}: {body[:500]}"
         except Exception as e:
             return False, f"failed: {e}"
