@@ -71,7 +71,7 @@ class WebhookSender:
                 payload_bytes,
                 b"\r\n",
                 f"--{boundary}\r\n".encode(),
-                f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode(),
+                f'Content-Disposition: form-data; name="files[0]"; filename="{filename}"\r\n'.encode(),
                 b"\r\n",
                 file_bytes,
                 b"\r\n",
